@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shopsphere-config
+  namespace: shopsphere
+data:
+  JWT_EXPIRES: "1d"
+  AUTH_SERVICE_URL: "http://auth-service:4001"
+  USER_SERVICE_URL: "http://user-service:4002"
+  ORDER_SERVICE_URL: "http://order-service:4003"
