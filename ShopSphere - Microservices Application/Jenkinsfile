@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        APP_DIR = 'ShopSphere - Microservices Application'
         AWS_REGION = "${env.AWS_REGION ?: 'us-east-1'}"
         IMAGE_PREFIX = "shopsphere"
         TAG = "${env.BUILD_NUMBER}"
@@ -12,6 +13,7 @@ pipeline {
             steps {
                 checkout scm
                 sh 'git status --short --branch'
+                sh 'test -f "$APP_DIR/Jenkinsfile"'
             }
         }
 
@@ -33,19 +35,19 @@ pipeline {
         stage('Install Dependencies') {
             parallel {
                 stage('auth-service') {
-                    steps { dir('auth-service') { sh 'npm install --no-audit --no-fund' } }
+                    steps { dir("${APP_DIR}/auth-service") { sh 'npm install --no-audit --no-fund' } }
                 }
                 stage('user-service') {
-                    steps { dir('user-service') { sh 'npm install --no-audit --no-fund' } }
+                    steps { dir("${APP_DIR}/user-service") { sh 'npm install --no-audit --no-fund' } }
                 }
                 stage('order-service') {
-                    steps { dir('order-service') { sh 'npm install --no-audit --no-fund' } }
+                    steps { dir("${APP_DIR}/order-service") { sh 'npm install --no-audit --no-fund' } }
                 }
                 stage('api-gateway') {
-                    steps { dir('api-gateway') { sh 'npm install --no-audit --no-fund' } }
+                    steps { dir("${APP_DIR}/api-gateway") { sh 'npm install --no-audit --no-fund' } }
                 }
                 stage('frontend') {
-                    steps { dir('frontend') { sh 'npm install --no-audit --no-fund && npm run build' } }
+                    steps { dir("${APP_DIR}/frontend") { sh 'npm install --no-audit --no-fund && npm run build' } }
                 }
             }
         }
@@ -53,30 +55,30 @@ pipeline {
         stage('Trivy Filesystem Scan') {
             parallel {
                 stage('auth-fs') {
-                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/auth-service' }
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "/work/$APP_DIR/auth-service"' }
                 }
                 stage('user-fs') {
-                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/user-service' }
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "/work/$APP_DIR/user-service"' }
                 }
                 stage('order-fs') {
-                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/order-service' }
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "/work/$APP_DIR/order-service"' }
                 }
                 stage('gateway-fs') {
-                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/api-gateway' }
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "/work/$APP_DIR/api-gateway"' }
                 }
                 stage('frontend-fs') {
-                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/frontend' }
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "/work/$APP_DIR/frontend"' }
                 }
             }
         }
 
         stage('Build Images') {
             steps {
-                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/auth-service:$TAG" ./auth-service'
-                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/user-service:$TAG" ./user-service'
-                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/order-service:$TAG" ./order-service'
-                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/api-gateway:$TAG" ./api-gateway'
-                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/frontend:$TAG" ./frontend'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/auth-service:$TAG" "$APP_DIR/auth-service"'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/user-service:$TAG" "$APP_DIR/user-service"'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/order-service:$TAG" "$APP_DIR/order-service"'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/api-gateway:$TAG" "$APP_DIR/api-gateway"'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/frontend:$TAG" "$APP_DIR/frontend"'
             }
         }
 
@@ -113,12 +115,12 @@ pipeline {
         stage('Update Kubernetes Images') {
             steps {
                 sh '''
-                    sed -i "s|image: .*shopsphere/auth-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/auth-service:${TAG}|" "k8s/auth-service/deployment.yaml"
-                    sed -i "s|image: .*shopsphere/user-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/user-service:${TAG}|" "k8s/user-service/deployment.yaml"
-                    sed -i "s|image: .*shopsphere/order-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/order-service:${TAG}|" "k8s/order-service/deployment.yaml"
-                    sed -i "s|image: .*shopsphere/api-gateway:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/api-gateway:${TAG}|" "k8s/api-gateway/deployment.yaml"
-                    sed -i "s|image: .*shopsphere/frontend:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/frontend:${TAG}|" "k8s/frontend/deployment.yaml"
-                    grep -R "image:" k8s/*/deployment.yaml
+                    sed -i "s|image: .*shopsphere/auth-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/auth-service:${TAG}|" "$APP_DIR/k8s/auth-service/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/user-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/user-service:${TAG}|" "$APP_DIR/k8s/user-service/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/order-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/order-service:${TAG}|" "$APP_DIR/k8s/order-service/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/api-gateway:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/api-gateway:${TAG}|" "$APP_DIR/k8s/api-gateway/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/frontend:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/frontend:${TAG}|" "$APP_DIR/k8s/frontend/deployment.yaml"
+                    grep -R "image:" "$APP_DIR/k8s"/*/deployment.yaml
                 '''
             }
         }
@@ -130,7 +132,7 @@ pipeline {
                     sh '''
                         git config user.name "Jenkins"
                         git config user.email "jenkins@local"
-                        git add "k8s"
+                        git add "$APP_DIR/k8s"
                         git diff --cached --quiet || git commit -m "ci: deploy ShopSphere image ${TAG} [skip ci]"
                         git push "https://${GIT_USER}:${GIT_TOKEN}@github.com/Cloud-Tamil/Application-Projects.git" HEAD:main
                     '''
@@ -140,7 +142,7 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh 'kubectl apply -f k8s/ --recursive'
+                sh 'kubectl apply -f "$APP_DIR/k8s/" --recursive'
                 sh 'kubectl -n shopsphere rollout status deployment/auth-service --timeout=180s'
                 sh 'kubectl -n shopsphere rollout status deployment/user-service --timeout=180s'
                 sh 'kubectl -n shopsphere rollout status deployment/order-service --timeout=180s'
