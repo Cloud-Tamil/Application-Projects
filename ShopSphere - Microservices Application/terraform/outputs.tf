@@ -15,13 +15,18 @@ output "eks_cluster_certificate_authority" {
 }
 
 output "vpc_id" {
-  description = "ID of the created VPC"
+  description = "ID of the ShopSphere VPC"
   value       = aws_vpc.shopsphere.id
 }
 
-output "subnet_ids" {
-  description = "Public subnet IDs"
+output "public_subnet_ids" {
+  description = "Public subnet IDs for internet-facing load balancers"
   value       = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet IDs used by EKS worker nodes"
+  value       = [aws_subnet.private_a.id, aws_subnet.private_b.id]
 }
 
 output "ecr_repository_urls" {
@@ -30,6 +35,6 @@ output "ecr_repository_urls" {
 }
 
 output "kubeconfig_command" {
-  description = "Run this to configure kubectl"
+  description = "Command to configure kubectl for the EKS cluster"
   value       = "aws eks update-kubeconfig --name ${aws_eks_cluster.shopsphere.name} --region ${var.aws_region}"
 }
