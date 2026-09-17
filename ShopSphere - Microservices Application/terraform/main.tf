@@ -16,6 +16,8 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_vpc" "shopsphere" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -29,8 +31,8 @@ resource "aws_subnet" "public_a" {
   availability_zone       = data.aws_availability_zones.available.names[0]
   map_public_ip_on_launch = true
   tags = {
-    Name                                        = "shopsphere-public-a"
-    "kubernetes.io/role/elb"                    = "1"
+    Name                                         = "shopsphere-public-a"
+    "kubernetes.io/role/elb"                     = "1"
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
   }
 }
@@ -41,8 +43,8 @@ resource "aws_subnet" "public_b" {
   availability_zone       = data.aws_availability_zones.available.names[1]
   map_public_ip_on_launch = true
   tags = {
-    Name                                        = "shopsphere-public-b"
-    "kubernetes.io/role/elb"                    = "1"
+    Name                                         = "shopsphere-public-b"
+    "kubernetes.io/role/elb"                     = "1"
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
   }
 }
@@ -75,7 +77,11 @@ resource "aws_iam_role" "eks_cluster" {
   name = "${var.cluster_name}-cluster-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "eks.amazonaws.com" } }]
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+    }]
   })
 }
 
@@ -88,7 +94,11 @@ resource "aws_iam_role" "eks_nodes" {
   name = "${var.cluster_name}-node-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" } }]
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
   })
 }
 
@@ -110,7 +120,7 @@ resource "aws_iam_role_policy_attachment" "eks_ecr_policy" {
 resource "aws_eks_cluster" "shopsphere" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster.arn
-  version  = "1.29"
+  version  = var.kubernetes_version
 
   vpc_config {
     subnet_ids              = [aws_subnet.public_a.id, aws_subnet.public_b.id]
@@ -158,4 +168,50 @@ resource "aws_eks_node_group" "workers" {
     aws_iam_role_policy_attachment.eks_ecr_policy,
     aws_eks_cluster.shopsphere,
   ]
+}
+
+locals {
+  ecr_repositories = toset([
+    "shopsphere/auth-service",
+    "shopsphere/user-service",
+    "shopsphere/order-service",
+    "shopsphere/api-gateway",
+    "shopsphere/frontend",
+  ])
+}
+
+resource "aws_ecr_repository" "shopsphere" {
+  for_each             = local.ecr_repositories
+  name                 = each.value
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  force_delete = false
+}
+
+resource "aws_ecr_lifecycle_policy" "shopsphere" {
+  for_each   = aws_ecr_repository.shopsphere
+  repository = each.value.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep the 20 most recent images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 20
+      }
+      action = {
+        type = "expire"
+      }
+    }]
+  })
 }
