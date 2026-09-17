@@ -1,5 +1,6 @@
 terraform {
   required_version = ">= 1.5.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -18,17 +19,30 @@ data "aws_availability_zones" "available" {
 
 data "aws_caller_identity" "current" {}
 
+locals {
+  az_a = data.aws_availability_zones.available.names[0]
+  az_b = data.aws_availability_zones.available.names[1]
+
+  ecr_repositories = toset([
+    "shopsphere/auth-service",
+    "shopsphere/user-service",
+    "shopsphere/order-service",
+    "shopsphere/api-gateway",
+    "shopsphere/frontend",
+  ])
+}
+
 resource "aws_vpc" "shopsphere" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "shopsphere-vpc" }
+  tags                 = { Name = "shopsphere-vpc" }
 }
 
 resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.shopsphere.id
   cidr_block              = "10.0.1.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[0]
+  availability_zone       = local.az_a
   map_public_ip_on_launch = true
   tags = {
     Name                                         = "shopsphere-public-a"
@@ -40,7 +54,7 @@ resource "aws_subnet" "public_a" {
 resource "aws_subnet" "public_b" {
   vpc_id                  = aws_vpc.shopsphere.id
   cidr_block              = "10.0.2.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[1]
+  availability_zone       = local.az_b
   map_public_ip_on_launch = true
   tags = {
     Name                                         = "shopsphere-public-b"
@@ -49,9 +63,43 @@ resource "aws_subnet" "public_b" {
   }
 }
 
+resource "aws_subnet" "private_a" {
+  vpc_id            = aws_vpc.shopsphere.id
+  cidr_block        = "10.0.11.0/24"
+  availability_zone = local.az_a
+  tags = {
+    Name                                         = "shopsphere-private-a"
+    "kubernetes.io/role/internal-elb"            = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+}
+
+resource "aws_subnet" "private_b" {
+  vpc_id            = aws_vpc.shopsphere.id
+  cidr_block        = "10.0.12.0/24"
+  availability_zone = local.az_b
+  tags = {
+    Name                                         = "shopsphere-private-b"
+    "kubernetes.io/role/internal-elb"            = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+}
+
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.shopsphere.id
   tags   = { Name = "shopsphere-igw" }
+}
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = { Name = "shopsphere-nat-eip" }
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public_a.id
+  depends_on    = [aws_internet_gateway.igw]
+  tags          = { Name = "shopsphere-nat" }
 }
 
 resource "aws_route_table" "public" {
@@ -63,14 +111,33 @@ resource "aws_route_table" "public" {
   tags = { Name = "shopsphere-public-rt" }
 }
 
-resource "aws_route_table_association" "a" {
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.shopsphere.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
+  tags = { Name = "shopsphere-private-rt" }
+}
+
+resource "aws_route_table_association" "public_a" {
   subnet_id      = aws_subnet.public_a.id
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table_association" "b" {
+resource "aws_route_table_association" "public_b" {
   subnet_id      = aws_subnet.public_b.id
   route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "private_a" {
+  subnet_id      = aws_subnet.private_a.id
+  route_table_id = aws_route_table.private.id
+}
+
+resource "aws_route_table_association" "private_b" {
+  subnet_id      = aws_subnet.private_b.id
+  route_table_id = aws_route_table.private.id
 }
 
 resource "aws_iam_role" "eks_cluster" {
@@ -123,9 +190,9 @@ resource "aws_eks_cluster" "shopsphere" {
   version  = var.kubernetes_version
 
   vpc_config {
-    subnet_ids              = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+    subnet_ids              = [aws_subnet.private_a.id, aws_subnet.private_b.id]
     endpoint_public_access  = true
-    endpoint_private_access = false
+    endpoint_private_access = true
   }
 
   enabled_cluster_log_types = ["api", "audit", "authenticator"]
@@ -133,8 +200,8 @@ resource "aws_eks_cluster" "shopsphere" {
 
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy,
-    aws_route_table_association.a,
-    aws_route_table_association.b,
+    aws_route_table_association.private_a,
+    aws_route_table_association.private_b,
   ]
 }
 
@@ -142,7 +209,7 @@ resource "aws_eks_node_group" "workers" {
   cluster_name    = aws_eks_cluster.shopsphere.name
   node_group_name = "${var.cluster_name}-workers"
   node_role_arn   = aws_iam_role.eks_nodes.arn
-  subnet_ids      = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+  subnet_ids      = [aws_subnet.private_a.id, aws_subnet.private_b.id]
 
   scaling_config {
     desired_size = var.node_desired_size
@@ -152,7 +219,7 @@ resource "aws_eks_node_group" "workers" {
 
   instance_types = [var.node_instance_type]
   capacity_type  = "ON_DEMAND"
-  disk_size      = 20
+  disk_size      = 30
 
   update_config {
     max_unavailable = 1
@@ -168,16 +235,6 @@ resource "aws_eks_node_group" "workers" {
     aws_iam_role_policy_attachment.eks_ecr_policy,
     aws_eks_cluster.shopsphere,
   ]
-}
-
-locals {
-  ecr_repositories = toset([
-    "shopsphere/auth-service",
-    "shopsphere/user-service",
-    "shopsphere/order-service",
-    "shopsphere/api-gateway",
-    "shopsphere/frontend",
-  ])
 }
 
 resource "aws_ecr_repository" "shopsphere" {
@@ -209,9 +266,7 @@ resource "aws_ecr_lifecycle_policy" "shopsphere" {
         countType   = "imageCountMoreThan"
         countNumber = 20
       }
-      action = {
-        type = "expire"
-      }
+      action = { type = "expire" }
     }]
   })
 }
