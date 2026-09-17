@@ -6,9 +6,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/YOUR_USERNAME/ShopSphere-Microservices.git'
-    targetRevision: HEAD
-    path: k8s
+    repoURL: 'https://github.com/Cloud-Tamil/Application-Projects.git'
+    targetRevision: 8b699d8077efbb1c1e884773b5003637a5e73498
+    path: ShopSphere - Microservices Application/k8s
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: shopsphere
