@@ -2,78 +2,159 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY = "${env.DOCKER_REGISTRY ?: 'docker.io'}/${env.IMAGE_PREFIX ?: 'shopsphere'}"
-        TAG      = "${env.BUILD_NUMBER}"
+        AWS_REGION = "${env.AWS_REGION ?: 'us-east-1'}"
+        IMAGE_PREFIX = "shopsphere"
+        TAG = "${env.BUILD_NUMBER}"
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'ls -la'
+                sh 'git status --short --branch'
+            }
+        }
+
+        stage('AWS / ECR Login') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
+                    script {
+                        env.AWS_ACCOUNT_ID = sh(
+                            script: 'aws sts get-caller-identity --query Account --output text',
+                            returnStdout: true
+                        ).trim()
+                        env.ECR_REGISTRY = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                    }
+                    sh 'aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"'
+                }
             }
         }
 
         stage('Install Dependencies') {
             parallel {
-                stage('auth-service')  { steps { dir('auth-service')  { sh 'npm install --no-audit --no-fund' } } }
-                stage('user-service')  { steps { dir('user-service')  { sh 'npm install --no-audit --no-fund' } } }
-                stage('order-service') { steps { dir('order-service') { sh 'npm install --no-audit --no-fund' } } }
-                stage('api-gateway')   { steps { dir('api-gateway')   { sh 'npm install --no-audit --no-fund' } } }
-                stage('frontend')      { steps { dir('frontend')      { sh 'npm install --no-audit --no-fund && npm run build' } } }
+                stage('auth-service') {
+                    steps { dir('auth-service') { sh 'npm install --no-audit --no-fund' } }
+                }
+                stage('user-service') {
+                    steps { dir('user-service') { sh 'npm install --no-audit --no-fund' } }
+                }
+                stage('order-service') {
+                    steps { dir('order-service') { sh 'npm install --no-audit --no-fund' } }
+                }
+                stage('api-gateway') {
+                    steps { dir('api-gateway') { sh 'npm install --no-audit --no-fund' } }
+                }
+                stage('frontend') {
+                    steps { dir('frontend') { sh 'npm install --no-audit --no-fund && npm run build' } }
+                }
+            }
+        }
+
+        stage('Trivy Filesystem Scan') {
+            parallel {
+                stage('auth-fs') {
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/auth-service' }
+                }
+                stage('user-fs') {
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/user-service' }
+                }
+                stage('order-fs') {
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/order-service' }
+                }
+                stage('gateway-fs') {
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/api-gateway' }
+                }
+                stage('frontend-fs') {
+                    steps { sh 'docker run --rm -v "$WORKSPACE:/work" aquasec/trivy:0.67.2 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work/frontend' }
+                }
             }
         }
 
         stage('Build Images') {
             steps {
-                sh "docker build -t ${REGISTRY}/auth-service:${TAG}  ./auth-service"
-                sh "docker build -t ${REGISTRY}/user-service:${TAG}  ./user-service"
-                sh "docker build -t ${REGISTRY}/order-service:${TAG} ./order-service"
-                sh "docker build -t ${REGISTRY}/api-gateway:${TAG}   ./api-gateway"
-                sh "docker build -t ${REGISTRY}/frontend:${TAG}      ./frontend"
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/auth-service:$TAG" ./auth-service'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/user-service:$TAG" ./user-service'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/order-service:$TAG" ./order-service'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/api-gateway:$TAG" ./api-gateway'
+                sh 'docker build -t "$ECR_REGISTRY/$IMAGE_PREFIX/frontend:$TAG" ./frontend'
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            parallel {
+                stage('auth-image') {
+                    steps { sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 image --severity HIGH,CRITICAL --exit-code 1 "$ECR_REGISTRY/$IMAGE_PREFIX/auth-service:$TAG"' }
+                }
+                stage('user-image') {
+                    steps { sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 image --severity HIGH,CRITICAL --exit-code 1 "$ECR_REGISTRY/$IMAGE_PREFIX/user-service:$TAG"' }
+                }
+                stage('order-image') {
+                    steps { sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 image --severity HIGH,CRITICAL --exit-code 1 "$ECR_REGISTRY/$IMAGE_PREFIX/order-service:$TAG"' }
+                }
+                stage('gateway-image') {
+                    steps { sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 image --severity HIGH,CRITICAL --exit-code 1 "$ECR_REGISTRY/$IMAGE_PREFIX/api-gateway:$TAG"' }
+                }
+                stage('frontend-image') {
+                    steps { sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 image --severity HIGH,CRITICAL --exit-code 1 "$ECR_REGISTRY/$IMAGE_PREFIX/frontend:$TAG"' }
+                }
             }
         }
 
         stage('Push Images') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DU', passwordVariable: 'DP')]) {
-                    sh 'echo $DP | docker login -u $DU --password-stdin'
-                    sh "docker push ${REGISTRY}/auth-service:${TAG}"
-                    sh "docker push ${REGISTRY}/user-service:${TAG}"
-                    sh "docker push ${REGISTRY}/order-service:${TAG}"
-                    sh "docker push ${REGISTRY}/api-gateway:${TAG}"
-                    sh "docker push ${REGISTRY}/frontend:${TAG}"
+                sh 'docker push "$ECR_REGISTRY/$IMAGE_PREFIX/auth-service:$TAG"'
+                sh 'docker push "$ECR_REGISTRY/$IMAGE_PREFIX/user-service:$TAG"'
+                sh 'docker push "$ECR_REGISTRY/$IMAGE_PREFIX/order-service:$TAG"'
+                sh 'docker push "$ECR_REGISTRY/$IMAGE_PREFIX/api-gateway:$TAG"'
+                sh 'docker push "$ECR_REGISTRY/$IMAGE_PREFIX/frontend:$TAG"'
+            }
+        }
+
+        stage('Update Kubernetes Images') {
+            steps {
+                sh '''
+                    sed -i "s|image: .*shopsphere/auth-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/auth-service:${TAG}|" "k8s/auth-service/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/user-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/user-service:${TAG}|" "k8s/user-service/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/order-service:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/order-service:${TAG}|" "k8s/order-service/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/api-gateway:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/api-gateway:${TAG}|" "k8s/api-gateway/deployment.yaml"
+                    sed -i "s|image: .*shopsphere/frontend:.*|image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/frontend:${TAG}|" "k8s/frontend/deployment.yaml"
+                    grep -R "image:" k8s/*/deployment.yaml
+                '''
+            }
+        }
+
+        stage('Commit Manifests') {
+            when { branch 'main' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-token', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh '''
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@local"
+                        git add "k8s"
+                        git diff --cached --quiet || git commit -m "ci: deploy ShopSphere image ${TAG} [skip ci]"
+                        git push "https://${GIT_USER}:${GIT_TOKEN}@github.com/Cloud-Tamil/Application-Projects.git" HEAD:main
+                    '''
                 }
             }
         }
 
-        stage('Update Manifests') {
+        stage('Deploy to Kubernetes') {
             steps {
-                sh """
-                    sed -i 's|image: .*auth-service:.*|image: ${REGISTRY}/auth-service:${TAG}|'   k8s/auth-service/deployment.yaml
-                    sed -i 's|image: .*user-service:.*|image: ${REGISTRY}/user-service:${TAG}|'   k8s/user-service/deployment.yaml
-                    sed -i 's|image: .*order-service:.*|image: ${REGISTRY}/order-service:${TAG}|' k8s/order-service/deployment.yaml
-                    sed -i 's|image: .*api-gateway:.*|image: ${REGISTRY}/api-gateway:${TAG}|'     k8s/api-gateway/deployment.yaml
-                    sed -i 's|image: .*frontend:.*|image: ${REGISTRY}/frontend:${TAG}|'           k8s/frontend/deployment.yaml
-                """
-            }
-        }
-
-        stage('Deploy') {
-            steps {
-                sh 'kubectl apply -f k8s/namespace.yaml'
                 sh 'kubectl apply -f k8s/ --recursive'
-                sh 'kubectl rollout status deployment/auth-service -n shopsphere --timeout=180s'
-                sh 'kubectl rollout status deployment/user-service -n shopsphere --timeout=180s'
-                sh 'kubectl rollout status deployment/order-service -n shopsphere --timeout=180s'
-                sh 'kubectl rollout status deployment/api-gateway -n shopsphere --timeout=180s'
-                sh 'kubectl rollout status deployment/frontend -n shopsphere --timeout=180s'
+                sh 'kubectl -n shopsphere rollout status deployment/auth-service --timeout=180s'
+                sh 'kubectl -n shopsphere rollout status deployment/user-service --timeout=180s'
+                sh 'kubectl -n shopsphere rollout status deployment/order-service --timeout=180s'
+                sh 'kubectl -n shopsphere rollout status deployment/api-gateway --timeout=180s'
+                sh 'kubectl -n shopsphere rollout status deployment/frontend --timeout=180s'
             }
         }
     }
 
     post {
-        success { echo "✅ Build #${BUILD_NUMBER} succeeded" }
-        failure { echo "❌ Build #${BUILD_NUMBER} failed" }
+        always {
+            sh 'docker logout "$ECR_REGISTRY" || true'
+        }
+        success { echo "Build #${BUILD_NUMBER} completed successfully" }
+        failure { echo "Build #${BUILD_NUMBER} failed" }
     }
 }
