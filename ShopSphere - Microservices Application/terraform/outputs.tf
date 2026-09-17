@@ -24,6 +24,11 @@ output "subnet_ids" {
   value       = [aws_subnet.public_a.id, aws_subnet.public_b.id]
 }
 
+output "ecr_repository_urls" {
+  description = "ECR repository URLs for ShopSphere services"
+  value       = { for name, repo in aws_ecr_repository.shopsphere : name => repo.repository_url }
+}
+
 output "kubeconfig_command" {
   description = "Run this to configure kubectl"
   value       = "aws eks update-kubeconfig --name ${aws_eks_cluster.shopsphere.name} --region ${var.aws_region}"
