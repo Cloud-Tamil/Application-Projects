@@ -50,18 +50,24 @@ pipeline {
         stage('Update Manifests') {
             steps {
                 sh """
-                    sed -i 's|shopsphere/auth-service:.*|shopsphere/auth-service:${TAG}|'   k8s/auth-service/deployment.yaml
-                    sed -i 's|shopsphere/user-service:.*|shopsphere/user-service:${TAG}|'   k8s/user-service/deployment.yaml
-                    sed -i 's|shopsphere/order-service:.*|shopsphere/order-service:${TAG}|' k8s/order-service/deployment.yaml
-                    sed -i 's|shopsphere/api-gateway:.*|shopsphere/api-gateway:${TAG}|'     k8s/api-gateway/deployment.yaml
-                    sed -i 's|shopsphere/frontend:.*|shopsphere/frontend:${TAG}|'           k8s/frontend/deployment.yaml
+                    sed -i 's|image: .*auth-service:.*|image: ${REGISTRY}/auth-service:${TAG}|'   k8s/auth-service/deployment.yaml
+                    sed -i 's|image: .*user-service:.*|image: ${REGISTRY}/user-service:${TAG}|'   k8s/user-service/deployment.yaml
+                    sed -i 's|image: .*order-service:.*|image: ${REGISTRY}/order-service:${TAG}|' k8s/order-service/deployment.yaml
+                    sed -i 's|image: .*api-gateway:.*|image: ${REGISTRY}/api-gateway:${TAG}|'     k8s/api-gateway/deployment.yaml
+                    sed -i 's|image: .*frontend:.*|image: ${REGISTRY}/frontend:${TAG}|'           k8s/frontend/deployment.yaml
                 """
             }
         }
 
         stage('Deploy') {
             steps {
-                sh 'kubectl apply -f k8s/ --recursive || true'
+                sh 'kubectl apply -f k8s/namespace.yaml'
+                sh 'kubectl apply -f k8s/ --recursive'
+                sh 'kubectl rollout status deployment/auth-service -n shopsphere --timeout=180s'
+                sh 'kubectl rollout status deployment/user-service -n shopsphere --timeout=180s'
+                sh 'kubectl rollout status deployment/order-service -n shopsphere --timeout=180s'
+                sh 'kubectl rollout status deployment/api-gateway -n shopsphere --timeout=180s'
+                sh 'kubectl rollout status deployment/frontend -n shopsphere --timeout=180s'
             }
         }
     }
