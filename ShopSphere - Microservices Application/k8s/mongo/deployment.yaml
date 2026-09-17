@@ -1,9 +1,10 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: mongo
   namespace: shopsphere
 spec:
+  serviceName: mongo
   replicas: 1
   selector:
     matchLabels:
@@ -35,6 +36,18 @@ spec:
               port: 27017
             initialDelaySeconds: 30
             periodSeconds: 20
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 20Gi
 ---
 apiVersion: v1
 kind: Service
@@ -42,6 +55,7 @@ metadata:
   name: mongo
   namespace: shopsphere
 spec:
+  clusterIP: None
   selector:
     app: mongo
   ports:
