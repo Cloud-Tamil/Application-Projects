@@ -5,6 +5,11 @@ metadata:
   namespace: shopsphere
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: user-service
@@ -13,10 +18,13 @@ spec:
       labels:
         app: user-service
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: user-service
           image: shopsphere/user-service:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 4002
           env:
@@ -29,6 +37,11 @@ spec:
                 secretKeyRef:
                   name: shopsphere-secrets
                   key: JWT_SECRET
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 100m
@@ -42,12 +55,21 @@ spec:
               port: 4002
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 4002
-            initialDelaySeconds: 15
+            initialDelaySeconds: 20
             periodSeconds: 20
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4002
+            periodSeconds: 5
+            failureThreshold: 12
+      terminationGracePeriodSeconds: 30
 ---
 apiVersion: v1
 kind: Service
@@ -55,6 +77,7 @@ metadata:
   name: user-service
   namespace: shopsphere
 spec:
+  type: ClusterIP
   selector:
     app: user-service
   ports:
