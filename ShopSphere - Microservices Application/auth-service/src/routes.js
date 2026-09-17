@@ -14,6 +14,13 @@ const userSchema = new mongoose.Schema({
 
 const AuthUser = mongoose.model('AuthUser', userSchema);
 
+const publicUser = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role
+});
+
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -36,12 +43,14 @@ router.post('/register', async (req, res) => {
       role: 'user'
     });
 
-    const token = signToken({ id: user._id.toString(), email: user.email, role: user.role });
-    res.status(201).json({
-      message: 'User registered',
-      token,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role }
+    const token = signToken({
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role
     });
+
+    res.status(201).json({ message: 'User registered', token, user: publicUser(user) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -59,12 +68,14 @@ router.post('/login', async (req, res) => {
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const token = signToken({ id: user._id.toString(), email: user.email, role: user.role });
-    res.json({
-      message: 'Login success',
-      token,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role }
+    const token = signToken({
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role
     });
+
+    res.json({ message: 'Login success', token, user: publicUser(user) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
