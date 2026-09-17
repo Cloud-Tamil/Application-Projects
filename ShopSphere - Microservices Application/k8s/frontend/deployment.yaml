@@ -26,7 +26,7 @@ spec:
           image: shopsphere/frontend:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -42,21 +42,21 @@ spec:
           readinessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8080
             initialDelaySeconds: 20
             periodSeconds: 20
             timeoutSeconds: 3
           startupProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8080
             periodSeconds: 5
             failureThreshold: 12
       terminationGracePeriodSeconds: 30
@@ -72,4 +72,4 @@ spec:
     app: frontend
   ports:
     - port: 80
-      targetPort: 80
+      targetPort: 8080
