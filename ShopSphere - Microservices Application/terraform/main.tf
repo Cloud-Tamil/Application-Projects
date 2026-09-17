@@ -184,6 +184,11 @@ resource "aws_iam_role_policy_attachment" "eks_ecr_policy" {
   role       = aws_iam_role.eks_nodes.name
 }
 
+resource "aws_iam_role_policy_attachment" "eks_ebs_csi_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+  role       = aws_iam_role.eks_nodes.name
+}
+
 resource "aws_eks_cluster" "shopsphere" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster.arn
@@ -233,8 +238,18 @@ resource "aws_eks_node_group" "workers" {
     aws_iam_role_policy_attachment.eks_worker_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
     aws_iam_role_policy_attachment.eks_ecr_policy,
+    aws_iam_role_policy_attachment.eks_ebs_csi_policy,
     aws_eks_cluster.shopsphere,
   ]
+}
+
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name                = aws_eks_cluster.shopsphere.name
+  addon_name                  = "aws-ebs-csi-driver"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "PRESERVE"
+
+  depends_on = [aws_eks_node_group.workers]
 }
 
 resource "aws_ecr_repository" "shopsphere" {
