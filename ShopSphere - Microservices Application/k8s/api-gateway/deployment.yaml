@@ -6,10 +6,12 @@ metadata:
 spec:
   replicas: 2
   selector:
-    matchLabels: { app: api-gateway }
+    matchLabels:
+      app: api-gateway
   template:
     metadata:
-      labels: { app: api-gateway }
+      labels:
+        app: api-gateway
     spec:
       containers:
         - name: api-gateway
@@ -18,10 +20,33 @@ spec:
           ports:
             - containerPort: 8080
           env:
-            - { name: PORT, value: "8080" }
-            - { name: AUTH_SERVICE_URL, value: "http://auth-service:4001" }
-            - { name: USER_SERVICE_URL, value: "http://user-service:4002" }
-            - { name: ORDER_SERVICE_URL, value: "http://order-service:4003" }
+            - name: PORT
+              value: "8080"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth-service:4001"
+            - name: USER_SERVICE_URL
+              value: "http://user-service:4002"
+            - name: ORDER_SERVICE_URL
+              value: "http://order-service:4003"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
 ---
 apiVersion: v1
 kind: Service
@@ -29,6 +54,8 @@ metadata:
   name: api-gateway
   namespace: shopsphere
 spec:
-  selector: { app: api-gateway }
+  selector:
+    app: api-gateway
   ports:
-    - { port: 8080, targetPort: 8080 }
+    - port: 8080
+      targetPort: 8080
