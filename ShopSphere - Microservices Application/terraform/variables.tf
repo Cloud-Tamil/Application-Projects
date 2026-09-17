@@ -10,6 +10,12 @@ variable "cluster_name" {
   default     = "shopsphere-eks"
 }
 
+variable "kubernetes_version" {
+  description = "Kubernetes version for EKS"
+  type        = string
+  default     = "1.34"
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for the VPC"
   type        = string
