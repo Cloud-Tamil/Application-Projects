@@ -28,7 +28,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-gateway-from-frontend
+  name: allow-gateway-ingress
   namespace: shopsphere
 spec:
   podSelector:
@@ -37,10 +37,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: frontend
+    - from: []
       ports:
         - protocol: TCP
           port: 8080
