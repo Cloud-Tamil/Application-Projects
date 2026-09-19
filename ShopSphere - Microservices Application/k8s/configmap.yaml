@@ -4,7 +4,11 @@ metadata:
   name: shopsphere-config
   namespace: shopsphere
 data:
-  JWT_EXPIRES: "1d"
-  AUTH_SERVICE_URL: "http://auth-service:4001"
-  USER_SERVICE_URL: "http://user-service:4002"
-  ORDER_SERVICE_URL: "http://order-service:4003"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  MONGO_URI: "mongodb://mongo:27017/shopsphere"
+  AUTH_SERVICE_URL: "http://auth-service:3001"
+  USER_SERVICE_URL: "http://user-service:3002"
+  ORDER_SERVICE_URL: "http://order-service:3003"
+  JWT_EXPIRES_IN: "7d"
+  REACT_APP_API_URL: "/api"
