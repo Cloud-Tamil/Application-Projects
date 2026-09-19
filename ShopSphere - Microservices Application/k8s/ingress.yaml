@@ -1,17 +1,17 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: shopsphere
+  name: shopsphere-ingress
   namespace: shopsphere
   annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/healthcheck-path: /health
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
-  ingressClassName: alb
+  ingressClassName: nginx
   rules:
-    - host: shopsphere.example.com
+    - host: shopsphere.local
       http:
         paths:
           - path: /api
@@ -19,12 +19,13 @@ spec:
             backend:
               service:
                 name: api-gateway
-                port:
-                  number: 8080
+                port: { number: 3000 }
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: frontend
-                port:
-                  number: 80
+                port: { number: 80 }
+  # tls:
+  #   - hosts: [shopsphere.local]
+  #     secretName: shopsphere-tls
