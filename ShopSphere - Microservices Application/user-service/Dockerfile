@@ -1,18 +1,18 @@
-FROM node:20-alpine
-
+FROM node:20-alpine AS builder
 WORKDIR /app
-ENV NODE_ENV=production
-
 COPY package*.json ./
-RUN npm install --omit=dev --no-audit --no-fund \
-    && npm cache clean --force
+RUN npm ci --only=production
 
-COPY --chown=node:node . .
-USER node
-
-EXPOSE 4002
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget --spider -q http://127.0.0.1:4002/health || exit 1
-
-CMD ["node", "src/index.js"]
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache dumb-init curl && \
+    addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --chown=nodejs:nodejs . .
+USER nodejs
+EXPOSE 3002
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:3002/health || exit 1
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "index.js"]
