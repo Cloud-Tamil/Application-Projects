@@ -1,193 +1,112 @@
-services:
-  mongo:
-    image: mongo:6
-    container_name: shopsphere-mongo
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    container_name: shopsphere-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  auth-service:
-    build: ./auth-service
-    container_name: shopsphere-auth
-    restart: unless-stopped
-    environment:
-      PORT: 4001
-      MONGO_URI: ${MONGO_URI_AUTH:?Set MONGO_URI_AUTH in .env}
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
-      JWT_EXPIRES: ${JWT_EXPIRES:-1d}
-    depends_on:
-      mongo:
-        condition: service_healthy
-    ports:
-      - "${AUTH_PORT:-4001}:4001"
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:4001/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  user-service:
-    build: ./user-service
-    container_name: shopsphere-user
-    restart: unless-stopped
-    environment:
-      PORT: 4002
-      MONGO_URI: ${MONGO_URI_USER:?Set MONGO_URI_USER in .env}
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
-    depends_on:
-      mongo:
-        condition: service_healthy
-      auth-service:
-        condition: service_healthy
-    ports:
-      - "${USER_PORT:-4002}:4002"
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:4002/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  order-service:
-    build: ./order-service
-    container_name: shopsphere-order
-    restart: unless-stopped
-    environment:
-      PORT: 4003
-      MONGO_URI: ${MONGO_URI_ORDER:?Set MONGO_URI_ORDER in .env}
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
-    depends_on:
-      mongo:
-        condition: service_healthy
-      auth-service:
-        condition: service_healthy
-    ports:
-      - "${ORDER_PORT:-4003}:4003"
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:4003/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  api-gateway:
-    build: ./api-gateway
-    container_name: shopsphere-gateway
-    restart: unless-stopped
-    environment:
-      PORT: 8080
-      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://auth-service:4001}
-      USER_SERVICE_URL: ${USER_SERVICE_URL:-http://user-service:4002}
-      ORDER_SERVICE_URL: ${ORDER_SERVICE_URL:-http://order-service:4003}
-    depends_on:
-      auth-service:
-        condition: service_healthy
-      user-service:
-        condition: service_healthy
-      order-service:
-        condition: service_healthy
-    ports:
-      - "${GATEWAY_PORT:-8080}:8080"
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  frontend:
-    build: ./frontend
-    container_name: shopsphere-frontend
-    restart: unless-stopped
-    depends_on:
-      api-gateway:
-        condition: service_healthy
-    ports:
-      - "${FRONTEND_PORT:-3000}:8080"
-    networks: [shopsphere]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  jenkins:
-    build:
-      context: ./jenkins
-      dockerfile: Dockerfile
-    container_name: shopsphere-jenkins
-    restart: unless-stopped
-    user: root
-    privileged: true
-    ports:
-      - "${JENKINS_PORT:-8081}:8080"
-      - "50000:50000"
-    volumes:
-      - jenkins_data:/var/jenkins_home
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks: [shopsphere]
-
-  prometheus:
-    image: prom/prometheus:v3.6.0
-    container_name: shopsphere-prometheus
-    restart: unless-stopped
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    networks: [shopsphere]
-
-  grafana:
-    image: grafana/grafana:12.2.0
-    container_name: shopsphere-grafana
-    restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT:-3001}:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?Set GF_SECURITY_ADMIN_PASSWORD in .env}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      prometheus:
-        condition: service_started
-    networks: [shopsphere]
+version: "3.9"
 
 networks:
   shopsphere:
     driver: bridge
 
 volumes:
-  mongo_data:
-  redis_data:
-  prometheus_data:
-  grafana_data:
-  jenkins_data:
+  mongo-data:
+  magento-data:
+
+services:
+  mongo:
+    image: mongo:6.0
+    container_name: shopsphere-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: shopsphere
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - shopsphere
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ./auth-service
+    container_name: shopsphere-auth
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      MONGO_URI: mongodb://mongo:27017/shopsphere
+      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+      JWT_EXPIRES_IN: 7d
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - shopsphere
+
+  user-service:
+    build:
+      context: ./user-service
+    container_name: shopsphere-user
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      MONGO_URI: mongodb://mongo:27017/shopsphere
+      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - shopsphere
+
+  order-service:
+    build:
+      context: ./order-service
+    container_name: shopsphere-order
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      MONGO_URI: mongodb://mongo:27017/shopsphere
+      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - shopsphere
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: shopsphere-gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      AUTH_SERVICE_URL: http://auth-service:3001
+      USER_SERVICE_URL: http://user-service:3002
+      ORDER_SERVICE_URL: http://order-service:3003
+      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+    depends_on:
+      - auth-service
+      - user-service
+      - order-service
+    networks:
+      - shopsphere
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: shopsphere-frontend
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - shopsphere
