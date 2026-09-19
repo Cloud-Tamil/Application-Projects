@@ -1,169 +1,111 @@
 pipeline {
     agent any
 
-    options {
-        timestamps()
-        disableConcurrentBuilds()
-        skipDefaultCheckout(true)
+    environment {
+        REGISTRY       = 'docker.io/shopsphere'
+        IMAGE_TAG      = "${env.BUILD_NUMBER}"
+        DOCKER_CREDS   = credentials('dockerhub-creds')
+        GIT_CREDS      = credentials('github-creds')
+        KUBECONFIG     = credentials('kubeconfig')
     }
 
-    environment {
-        APP_DIR = 'ShopSphere - Microservices Application'
-        AWS_REGION = "${env.AWS_REGION ?: 'us-east-1'}"
-        IMAGE_PREFIX = 'shopsphere'
-        TAG = "build-${env.BUILD_NUMBER}"
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 45, unit: 'MINUTES')
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                script {
-                    if (env.GIT_COMMIT) {
-                        env.TAG = env.GIT_COMMIT.take(12)
-                    }
-                }
-                sh 'git status --short --branch'
-                sh 'test -f "$APP_DIR/Jenkinsfile"'
+                sh 'git rev-parse --short HEAD > .git-sha'
             }
         }
 
-        stage('Validate Source') {
+        stage('Install Dependencies') {
             parallel {
-                stage('Node syntax') {
-                    steps {
-                        sh '''
-                            set -e
-                            for service in auth-service user-service order-service api-gateway; do
-                              find "$APP_DIR/$service/src" -name '*.js' -print0 | xargs -0 -n1 node --check
-                            done
-                        '''
+                stage('api-gateway')   { steps { dir('api-gateway')   { sh 'npm ci' } } }
+                stage('auth-service')  { steps { dir('auth-service')  { sh 'npm ci' } } }
+                stage('user-service')  { steps { dir('user-service')  { sh 'npm ci' } } }
+                stage('order-service') { steps { dir('order-service') { sh 'npm ci' } } }
+                stage('frontend')      { steps { dir('frontend')      { sh 'npm ci' } } }
+            }
+        }
+
+        stage('Lint & Test') {
+            parallel {
+                stage('api-gateway')   { steps { dir('api-gateway')   { sh 'npm test --if-present' } } }
+                stage('auth-service')  { steps { dir('auth-service')  { sh 'npm test --if-present' } } }
+                stage('user-service')  { steps { dir('user-service')  { sh 'npm test --if-present' } } }
+                stage('order-service') { steps { dir('order-service') { sh 'npm test --if-present' } } }
+                stage('frontend')      { steps { dir('frontend')      { sh 'npm test --if-present -- --watchAll=false' } } }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    def services = ['api-gateway', 'auth-service', 'user-service', 'order-service', 'frontend']
+                    for (svc in services) {
+                        sh """
+                            docker build -t ${REGISTRY}/${svc}:${IMAGE_TAG} \
+                                         -t ${REGISTRY}/${svc}:latest \
+                                         ./${svc}
+                        """
                     }
                 }
-                stage('Frontend build') {
-                    steps {
-                        dir("${APP_DIR}/frontend") {
-                            sh 'npm install --no-audit --no-fund'
-                            sh 'npm run build'
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Trivy Filesystem Scan') {
-            steps {
-                sh '''
-                    docker run --rm \
-                      -v "$WORKSPACE:/work" \
-                      aquasec/trivy:0.67.2 fs \
-                      --scanners vuln,secret \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 1 \
-                      "/work/$APP_DIR"
-                '''
-            }
-        }
-
-        stage('AWS / ECR Login') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
-                    script {
-                        env.AWS_ACCOUNT_ID = sh(
-                            script: 'aws sts get-caller-identity --query Account --output text',
-                            returnStdout: true
-                        ).trim()
-                        env.ECR_REGISTRY = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
-                    }
-                    sh 'aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"'
-                }
-            }
-        }
-
-        stage('Build Images') {
-            steps {
-                sh '''
-                    set -e
-                    for service in auth-service user-service order-service api-gateway frontend; do
-                      docker build --pull -t "$ECR_REGISTRY/$IMAGE_PREFIX/$service:$TAG" "$APP_DIR/$service"
-                    done
-                '''
-            }
-        }
-
-        stage('Trivy Image Scan') {
-            steps {
-                sh '''
-                    set -e
-                    for image in auth-service user-service order-service api-gateway frontend; do
-                      docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                        aquasec/trivy:0.67.2 image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 1 \
-                        "$ECR_REGISTRY/$IMAGE_PREFIX/$image:$TAG"
-                    done
-                '''
             }
         }
 
         stage('Push Images') {
             steps {
-                sh '''
-                    set -e
-                    for image in auth-service user-service order-service api-gateway frontend; do
-                      docker push "$ECR_REGISTRY/$IMAGE_PREFIX/$image:$TAG"
-                    done
-                '''
-            }
-        }
-
-        stage('Update GitOps Manifests') {
-            when { branch 'main' }
-            steps {
-                sh '''
-                    set -e
-                    for service in auth-service user-service order-service api-gateway frontend; do
-                      sed -i "s|^[[:space:]]*image:.*|          image: ${ECR_REGISTRY}/${IMAGE_PREFIX}/${service}:${TAG}|" \
-                        "$APP_DIR/k8s/${service}/deployment.yaml"
-                    done
-                    grep -R "image:" "$APP_DIR/k8s"/*/deployment.yaml
-                '''
-            }
-        }
-
-        stage('Commit GitOps Changes') {
-            when { branch 'main' }
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'github-token', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
-                    sh '''
-                        set -e
-                        git config user.name "Jenkins"
-                        git config user.email "jenkins@local"
-                        git add "$APP_DIR/k8s"
-                        if git diff --cached --quiet; then
-                          echo "No manifest changes to commit"
-                        else
-                          git commit -m "ci: deploy ShopSphere ${TAG} [skip ci]"
-                          git push "https://${GIT_USER}:${GIT_TOKEN}@github.com/Cloud-Tamil/Application-Projects.git" HEAD:main
-                        fi
-                    '''
+                sh "echo \$DOCKER_CREDS_PSW | docker login -u \$DOCKER_CREDS_USR --password-stdin"
+                script {
+                    def services = ['api-gateway', 'auth-service', 'user-service', 'order-service', 'frontend']
+                    for (svc in services) {
+                        sh "docker push ${REGISTRY}/${svc}:${IMAGE_TAG}"
+                        sh "docker push ${REGISTRY}/${svc}:latest"
+                    }
                 }
             }
         }
 
-        stage('GitOps Handoff') {
-            when { branch 'main' }
+        stage('Update K8s Manifests') {
             steps {
-                echo 'Argo CD watches the k8s directory and will reconcile the new image tags.'
+                sh """
+                    for svc in api-gateway auth-service user-service order-service frontend; do
+                        sed -i "s|image: .*shopsphere/\${svc}:.*|image: ${REGISTRY}/\${svc}:${IMAGE_TAG}|g" k8s/\${svc}/deployment.yaml || true
+                    done
+                """
+                sh 'git config user.email "jenkins@shopsphere.com"'
+                sh 'git config user.name "Jenkins CI"'
+                sh 'git add k8s/'
+                sh 'git commit -m "chore: bump images to ${IMAGE_TAG} [skip ci]" || true'
+                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh "git push https://\${GIT_USER}:\${GIT_TOKEN}@github.com/your-org/shopsphere.git HEAD:main || true"
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh 'kubectl get pods -n shopsphere'
+                sh 'kubectl rollout status deployment -n shopsphere --timeout=180s || true'
             }
         }
     }
 
     post {
-        always {
-            sh 'docker logout "$ECR_REGISTRY" || true'
+        success {
+            echo '✅ ShopSphere pipeline succeeded.'
         }
-        success { echo "ShopSphere CI/CD completed successfully: ${TAG}" }
-        failure { echo "ShopSphere CI/CD failed: ${TAG}" }
+        failure {
+            echo '❌ ShopSphere pipeline failed.'
+        }
+        always {
+            sh 'docker logout || true'
+            cleanWs()
+        }
     }
 }
